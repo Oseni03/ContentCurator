@@ -38,13 +38,12 @@ class Curator:
                 del entry['links']
                 del entry['content']
 
-                if 'www.youtube.com' in entry['link']:
-                    entry['is_youtube'] = True
                 
                 entry['title'] = html.unescape(entry['title'].replace('</b>', '').replace('<b>', ''))
                 entry['summary'] = html.unescape(entry['summary'].replace('</b>', '').replace('<b>', ''))
 
-                results.append(entry)
+                if 'www.youtube.com' not in entry['link'] and 'www.cnbc.com' not in entry['link']:
+                    results.append(entry)
         return results
     
     def google_search(self, query):
@@ -55,28 +54,40 @@ class Curator:
             "cx": SEARCH_ENGINE_ID,
         }
         response = requests.get(url, params=params).json()
+
         pprint.pprint(response)
+
         results = []
         for item in response["items"]:
-            if "webpage" in item["pagemap"] and item["pagemap"]["metatags"][0]["og:type"] != "video":
-                data = {
-                    "thumbnail": item["pagemap"]["cse_thumbnail"],
-                    "datemodified": item["pagemap"]["webpage"][0]["datemodified"],
-                    "datecreated": item["pagemap"]["webpage"][0]["datecreated"],
-                    "keywords": item["pagemap"]["webpage"][0]["keywords"],
-                    "name": item["pagemap"]["webpage"][0]["name"],
-                    "site_name": item["pagemap"]["metatags"][0]["og:site_name"],
-                    "image_url": item["pagemap"]["webpage"][0]["image"],
-                    "link": item["pagemap"]["metatags"][0]["og:url"],
-                }
-                results.append(data)
+            if "webpage" in item["pagemap"]:
+                try:
+                    data = {
+                        "thumbnail": item["pagemap"]["cse_thumbnail"],
+                        "datemodified": item["pagemap"]["webpage"][0]["datemodified"],
+                        "datecreated": item["pagemap"]["webpage"][0]["datecreated"],
+                        "keywords": item["pagemap"]["webpage"][0]["keywords"],
+                        "name": item["pagemap"]["webpage"][0]["name"],
+                        "site_name": item["pagemap"]["metatags"][0]["og:site_name"],
+                        "image_url": item["pagemap"]["webpage"][0]["image"],
+                        "link": item["pagemap"]["metatags"][0]["og:url"],
+                    }
+                    results.append(data)
+                except:
+                    pass
         return results
+    
+    def run(self, rss_urls=['https://www.google.com/alerts/feeds/17807583742681731767/9147937363070830210']):
+        feeds = self.get_feeds(rss_urls)
+        for feed in feeds:
+            # pprint.pprint(feed)
+            results = curator.google_search(feed.title)
+
+            pprint.pprint(results)
+
+            with open("response.json", "w") as file:
+                file.write(json.dumps(results, indent=4))
 
 
 if '__name__'=='__name__':
     curator = Curator()
-    feeds = curator.get_feeds(['https://www.google.com/alerts/feeds/17807583742681731767/9147937363070830210'])
-    pprint.pprint(feeds[0].title)
-    results = curator.google_search(feeds[0].title)
-    with open("response.json", "w") as file:
-        file.write(json.dumps(results, indent=4))
+    curator.run()
