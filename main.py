@@ -7,7 +7,7 @@ import feedparser
 from keybert import KeyBERT
 from urllib.parse import urlparse
 from google_alerts import GoogleAlerts
-from relevancy import generate_relevance_score, process_subject_fields
+from relevancy import run_relevance_scoring
 from langchain.document_loaders import WebBaseLoader
 
 env = environ.Env()
@@ -39,87 +39,71 @@ class Curator:
         """
         ga = GoogleAlerts(self.email, self.password)
         ga.authenticate()
-        feed = ga.create(topic, {"delivery": delivery, "match_type": match_type})
+        feed = ga.create(
+            topic,
+            {
+                "delivery": delivery,
+                "match_type": match_type,
+                "alert_frequency": alert_frequency,
+                "region": region,
+                "language": language,
+            },
+        )
         return feed
 
-    def read_feeds(self, rss_urls):
+    def read_feeds(self, rss_url):
         results = []
 
-        for rss_url in rss_urls:
-            feed = feedparser.parse(rss_url)
+        feed = feedparser.parse(rss_url)
 
-            entries = feed.entries
-            for entry in entries:
-                google_affiliate_url_parse = urlparse(entry.link).query.split("&")
-                for url in google_affiliate_url_parse:
-                    if url.startswith("url"):
-                        entry["link"] = url.split("=")[-1]
-                del entry["id"]
+        entries = feed.entries
+        print(entries)
+        for entry in entries:
+            google_affiliate_url_parse = urlparse(entry.link).query.split("&")
+            for url in google_affiliate_url_parse:
+                if url.startswith("url"):
+                    entry["link"] = url.split("=")[-1]
+
+            try:
                 del entry["guidislink"]
+            except:
+                pass
+            try:
                 del entry["published_parsed"]
+            except:
+                pass
+            try:
                 del entry["updated_parsed"]
+            except:
+                pass
+            try:
                 del entry["author_detail"]
+            except:
+                pass
+            try:
                 del entry["title_detail"]
+            except:
+                pass
+            try:
                 del entry["links"]
+            except:
+                pass
+            try:
                 del entry["content"]
+            except:
+                pass
 
-                entry["title"] = html.unescape(
-                    entry["title"].replace("</b>", "").replace("<b>", "")
-                )
-                entry["summary"] = html.unescape(
-                    entry["summary"].replace("</b>", "").replace("<b>", "")
-                )
-                results.append(entry)
+            entry["title"] = html.unescape(
+                entry["title"].replace("</b>", "").replace("<b>", "")
+            )
+            entry["summary"] = html.unescape(
+                entry["summary"].replace("</b>", "").replace("<b>", "")
+            )
+            results.append(entry)
         return results
 
-    def extract_keywords(self, texts):
-        kw_model = KeyBERT(model="all-mpnet-base-v2")
-        keywords = kw_model.extract_keywords(
-            texts,
-            keyphrase_ngram_range=(1, 3),
-            stop_words="english",
-            highlight=False,
-            top_n=10,
-        )
-        keywords_list = list(dict(keywords).keys())
-        return keywords_list
-
-    def google_search(self, query):
-        url = "https://customsearch.googleapis.com/customsearch/v1"
-        params = {
-            "q": query,
-            "key": API_KEY,
-            "cx": SEARCH_ENGINE_ID,
-        }
-        response = requests.get(url, params=params).json()
-
-        pprint.pprint(response)
-
-        results = []
-        for item in response["items"]:
-            if "webpage" in item["pagemap"]:
-                try:
-                    data = {
-                        "thumbnail": item["pagemap"]["cse_thumbnail"],
-                        "datemodified": item["pagemap"]["webpage"][0]["datemodified"],
-                        "datecreated": item["pagemap"]["webpage"][0]["datecreated"],
-                        "keywords": item["pagemap"]["webpage"][0]["keywords"].split(
-                            ","
-                        ),
-                        "name": item["pagemap"]["webpage"][0]["name"],
-                        "site_name": item["pagemap"]["metatags"][0]["og:site_name"],
-                        "image_url": item["pagemap"]["webpage"][0]["image"],
-                        "link": item["pagemap"]["metatags"][0]["og:url"],
-                    }
-                    results.append(data)
-                except:
-                    pass
-        return results
-
-    def load_pages(self, urls: list):
-        loader = WebBaseLoader(urls)
-        docs = loader.load()
-        return [doc.page_content for doc in docs]
+    def get_relevancy_score(self, topic, feeds):
+        return run_relevance_scoring(topic, feeds)
 
     def curate(self, topic: str, context: str):
         """To be done"""
@@ -155,5 +139,9 @@ class Curator:
 
 
 if "__name__" == "__name__":
-    curator = Curator()
-    curator.run()
+    curator = Curator("hi", "there")
+    feeds = curator.read_feeds(
+        "https://www.google.com.ng/alerts/feeds/17807583742681731767/11397651099657751387"
+    )
+    with open("feeds.json", "w") as file:
+        file.write(json.dumps(feeds, indent=4))

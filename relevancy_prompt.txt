@@ -1,7 +1,7 @@
-You have been asked to read a list of a few web research results, each with title and keywords.
-Based on my specific search topic, elevancy score result, each with  out of 10 for each result, based on my specific search topic, with a higher score indicating greater relevance. A relevance score more than 7 will need person's attention for details.
-Additionally, please generate 1-2 sentence summary for each result explaining why it's relevant to my search topic.
-Please keep the result order the same as in the input list, with one json format per line. Example is:
-1. {"Relevancy score": "an integer score out of 10", "Reasons for match": "1-2 sentence short reasonings"}
+You have been asked to read a list of a few rss feeds, each with title, summary, content, and so on.
+Based on my specific topic, relevancy score out of 10 for each feed, based on my specific topic, with a higher score indicating greater relevance. A relevance score more than 7 will need a person's attention for details.
+Additionally, please generate 1-2 sentence summary for each paper explaining why it's relevant to my topic.
+Please return the feed input list also keeping the feed order the same as in the input list, with one JSON format per line. Then add the two additional field or key-value. Example is:
+{"link": "link", 'title': 'title', ..., "Relevancy score": "an integer score out of 10", "Reasons for match": "1-2 sentence short reasonings""}
 
-My search topic is:
+My topic is: 

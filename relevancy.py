@@ -1,166 +1,179 @@
-"""
-run:
-python -m relevancy run_all_results \
-  --output_dir ./data \
-  --model_name="gpt-3.5-turbo-16k" \
-"""
-import time
 import json
-import os
-import random
 import re
-import string
+import utils
+import tqdm
 from datetime import datetime
 
-import numpy as np
-import tqdm
-import utils
 
-
-def encode_prompt(query, prompt_results):
+# Function to encode prompt instructions
+def encode_prompt(topic, search_results, num_result_in_prompt):
     """Encode multiple prompt instructions into a single string."""
-    prompt = open("relevancy_prompt.txt").read() + "\n"
-    prompt += query['topic']
+    prompt = f"Relevance score calculation for the topic: {topic}\n\n"
 
-    for idx, task_dict in enumerate(prompt_results):
-        (title, keywords, site_name) = task_dict["title"], task_dict["keywords"], task_dict["site_name"]
-        if not title:
-            raise
+    for idx, result in enumerate(search_results):
+        title = result.get("title", "")
+        summary = result.get("summary", "")
+        id = result.get("id", "")
+
         prompt += f"###\n"
         prompt += f"{idx + 1}. Title: {title}\n"
-        prompt += f"{idx + 1}. keywords: {keywords}\n"
-        prompt += f"{idx + 1}. site name: {site_name}\n"
-    prompt += f"\n Generate response:\n1."
-    print(prompt)
+        prompt += f"{idx + 1}. Summary: {summary}\n"
+        prompt += f"{idx + 1}. Id: {id}\n"
+
+    prompt += f"\nGenerate response for relevance scores:\n1."
     return prompt
 
 
-def post_process_chat_gpt_response(paper_data, response, threshold_score=8):
-    selected_data = []
-    if response is None:
-        return []
-    json_items = response['message']['content'].replace("\n\n", "\n").split("\n")
-    pattern = r"^\d+\. |\\"
-    import pprint
-    try:
-        score_items = [
-            json.loads(re.sub(pattern, "", line))
-            for line in json_items if "relevancy score" in line.lower()]
-    except Exception:
-        pprint.pprint([re.sub(pattern, "", line) for line in json_items if "relevancy score" in line.lower()])
-        raise RuntimeError("failed")
-    pprint.pprint(score_items)
-    scores = []
-    for item in score_items:
-        temp = item["Relevancy score"]
-        if isinstance(temp, str) and "/" in temp:
-            scores.append(int(temp.split("/")[0]))
-        else:
-            scores.append(int(temp))
-    if len(score_items) != len(paper_data):
-        score_items = score_items[:len(paper_data)]
-        hallucination = True
-    else:
-        hallucination = False
-
-    for idx, inst in enumerate(score_items):
-        # if the decoding stops due to length, the last example is likely truncated so we discard it
-        if scores[idx] < threshold_score:
-            continue
-        output_str = "Title: " + paper_data[idx]["title"] + "\n"
-        output_str += "keywords: " + paper_data[idx]["keywords"] + "\n"
-        output_str += "Link: " + paper_data[idx]["link"] + "\n"
-        for key, value in inst.items():
-            paper_data[idx][key] = value
-            output_str += str(key) + ": " + str(value) + "\n"
-        paper_data[idx]['summarized_text'] = output_str
-        selected_data.append(paper_data[idx])
-    return selected_data, hallucination
-
-
-def find_word_in_string(w, s):
-    return re.compile(r"\b({0})\b".format(w), flags=re.IGNORECASE).search(s)
-
-
-def process_subject_fields(keywords):
-    all_keywords = keywords.split(";")
-    all_keywords = [s.split(" (")[0] for s in all_keywords]
-    return all_keywords
-
-def generate_relevance_score(
-    results,
-    query,
-    model_name="gpt-3.5-turbo-16k",
-    threshold_score=8,
-    num_result_in_prompt=4,
-    temperature=0.4,
-    top_p=1.0,
-    sorting=True
+# Function to process GPT-3 response and generate relevance scores
+def generate_relevance_scores(
+    topic,
+    search_results,
+    model_name,
+    threshold_score,
+    num_result_in_prompt,
+    temperature,
 ):
     ans_data = []
-    request_idx = 1
-    hallucination = False
-    for id in tqdm.tqdm(range(0, len(results), num_result_in_prompt)):
-        prompt_results = results[id:id+num_result_in_prompt]
-        # only sampling from the seed tasks
-        prompt = encode_prompt(query, prompt_results)
+    for idx in tqdm.tqdm(range(0, len(search_results), num_result_in_prompt)):
+        batch_results = search_results[idx : idx + num_result_in_prompt]
+        prompt = encode_prompt(topic, batch_results, num_result_in_prompt)
 
         decoding_args = utils.OpenAIDecodingArguments(
             temperature=temperature,
             n=1,
-            max_tokens=128*num_result_in_prompt, # The response for each paper should be less than 128 tokens. 
-            top_p=top_p,
+            max_tokens=128
+            * num_result_in_prompt,  # Response for each paper should be less than 128 tokens
+            top_p=1.0,
         )
-        request_start = time.time()
+
         response = utils.openai_completion(
             prompts=prompt,
             model_name=model_name,
             batch_size=1,
             decoding_args=decoding_args,
-            logit_bias={"100257": -100},  # prevent the <|endoftext|> from being generated
+            logit_bias={"100257": -100},  # Prevent the token from being generated
         )
-        print ("response", response['message']['content'])
-        request_duration = time.time() - request_start
 
-        process_start = time.time()
-        batch_data, hallu = post_process_chat_gpt_response(prompt_results, response, threshold_score=threshold_score)
-        hallucination = hallucination or hallu
+        batch_data = post_process_gpt_response(batch_results, response, threshold_score)
         ans_data.extend(batch_data)
 
-        print(f"Request {request_idx+1} took {request_duration:.2f}s")
-        print(f"Post-processing took {time.time() - process_start:.2f}s")
-
-    if sorting:
-        ans_data = sorted(ans_data, key=lambda x: int(x["Relevancy score"]), reverse=True)
-    
-    return ans_data, hallucination
-
-def run_all_results(
-    query={"topic":"", "keywords":["Computation and Language", "Artificial Intelligence"]},
-    date=None,
-    results=[],
-    model_name="gpt-3.5-turbo-16k",
-    threshold_score=8,
-    num_result_in_prompt=10,
-    temperature=0.4,
-    top_p=1.0
-):
-    if date is None:
-        date = datetime.today().strftime('%a, %d %b %y')
-        # string format such as Wed, 10 May 23
-    print ("the date for the search data is: ", date)
-
-    all_results_in_keywords = [
-        t for t in results
-        if bool(set(process_subject_fields(t['keywords'])) & set(query['keywords']))
-    ]
-    print(f"After filtering keywords, we have {len(all_results_in_keywords)} search results left.")
-    ans_data = generate_relevance_score(all_results_in_keywords, query, model_name, threshold_score, num_result_in_prompt, temperature, top_p)
-    utils.write_ans_to_file(ans_data, date, output_dir="../outputs")
+    ans_data = sorted(ans_data, key=lambda x: int(x["Relevancy score"]), reverse=True)
     return ans_data
 
 
+# Function to post-process GPT-3 response and filter results based on threshold score
+def post_process_gpt_response(search_results, response, threshold_score):
+    selected_data = []
+    if response is None:
+        return []
+
+    json_items = response["message"]["content"].replace("\n\n", "\n").split("\n")
+    pattern = r"^\d+\. |\\"
+
+    score_items = [
+        json.loads(re.sub(pattern, "", line))
+        for line in json_items
+        if "relevancy score" in line.lower()
+    ]
+
+    scores = []
+    for item in score_items:
+        temp = item.get("Relevancy score")
+        if isinstance(temp, str) and "/" in temp:
+            scores.append(int(temp.split("/")[0]))
+        else:
+            scores.append(int(temp))
+
+    for idx, inst in enumerate(score_items):
+        if scores[idx] < threshold_score:
+            continue
+
+        output_str = "Title: " + search_results[idx].get("title", "") + "\n"
+        output_str += "Summary: " + search_results[idx].get("summary", "") + "\n"
+        output_str += "Id: " + search_results[idx].get("id", "") + "\n"
+
+        for key, value in inst.items():
+            search_results[idx][key] = value
+            output_str += str(key) + ": " + str(value) + "\n"
+
+        search_results[idx]["summarized_text"] = output_str
+        selected_data.append(search_results[idx])
+
+    return selected_data
+
+
+# Function to run relevance score generation for search results
+def run_relevance_scoring(
+    topic,
+    search_results,
+    model_name="gpt-3.5-turbo-16k",
+    threshold_score=8,
+    num_result_in_prompt=4,
+    temperature=0.4,
+):
+    """
+    Run relevance scoring for search results based on the specified topic.
+
+    Parameters:
+    - topic: The specific topic for relevance scoring (e.g., "Machine Learning").
+    - search_results: List of dictionaries containing search results.
+    - model_name: Name of the GPT model to use for scoring (default: "gpt-3.5-turbo-16k").
+    - threshold_score: The minimum score for relevance (default: 8).
+    - num_result_in_prompt: Number of results to include in each prompt (default: 4).
+    - temperature: Temperature parameter for generating responses (default: 0.4).
+
+    Returns:
+    - ans_data: List of dictionaries containing the scored and processed search results.
+    """
+    date = datetime.today().strftime("%a, %d %b %y")
+    print("Date for the search data is:", date)
+
+    print(f"Total search results: {len(search_results)}")
+    ans_data = generate_relevance_scores(
+        topic,
+        search_results,
+        model_name,
+        threshold_score,
+        num_result_in_prompt,
+        temperature,
+    )
+
+    # Write the results to an output file or perform further processing
+    # Example: utils.write_ans_to_file(ans_data, date, output_dir="../outputs")
+
+    return ans_data
+
+
+# Example usage:
 if __name__ == "__main__":
-    query = {"topic":"future of Artificial Intelligence",
-    "keywords":["Computation and Language"]}
-    ans_data = run_all_results(query)
+    # Sample search results (list of dictionaries)
+    search_results = [
+        {
+            "id": "1546743444",
+            "title": "Title 1",
+            "summary": "summary of the ...",
+        },
+        {
+            "id": "762456758",
+            "title": "Title 2",
+            "summary": "summary of the ...",
+        },
+        # Add more search result dictionaries here...
+    ]
+
+    # Define parameters
+    topic = "Machine Learning"
+    model_name = "gpt-3.5-turbo-16k"
+    threshold_score = 8
+    num_result_in_prompt = 4
+    temperature = 0.5
+
+    # Run relevance scoring for search results
+    relevance_scores = run_relevance_scoring(
+        topic,
+        search_results,
+        model_name,
+        threshold_score,
+        num_result_in_prompt,
+        temperature,
+    )
